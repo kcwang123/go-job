@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/anatolykoptev/go_job/internal/engine"
+	"github.com/anatolykoptev/go_job/internal/engine/jobs"
 	"github.com/anatolykoptev/go_job/internal/engine/jobs/connectors"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
