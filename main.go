@@ -261,6 +261,11 @@ func startPrometheusScrape(ctx context.Context, logger *slog.Logger) {
 // the ingest worker can fire Telegram notifications on OutcomeCreated.
 func initEngine(sigCtx context.Context) hunt.Notifier {
 	directFirst, initPool := resolveFetchMode(fetchDirectFirst)
+	// A standalone go-job process still needs one deterministic web-search
+	// backend to discover Greenhouse/Lever/Ashby board slugs. When no external
+	// go-search service is configured, enable Startpage direct search by default.
+	// Operators can explicitly disable it with DIRECT_STARTPAGE=false.
+	goSearchConfigured := strings.TrimSpace(env.Str("GO_SEARCH_URL", "")) != ""
 
 	c := engine.Config{
 		LLMAPIKey:                 env.Str("LLM_API_KEY", ""),
@@ -286,7 +291,7 @@ func initEngine(sigCtx context.Context) hunt.Notifier {
 		// VaelorNotifyURL and BountyNotifyChatID removed — notifications now go via
 		// the go-kit ProductSink bot (TELEGRAM_BOT_TOKEN + HUNT_NOTIFY_CHAT_ID).
 		DirectDDG:              env.Bool("DIRECT_DDG", false),
-		DirectStartpage:        env.Bool("DIRECT_STARTPAGE", false),
+		DirectStartpage:        env.Bool("DIRECT_STARTPAGE", !goSearchConfigured),
 		DirectBrave:            env.Bool("DIRECT_BRAVE", false),
 		DirectReddit:           env.Bool("DIRECT_REDDIT", false),
 		DirectWikipedia:        env.Bool("DIRECT_WIKIPEDIA", false),

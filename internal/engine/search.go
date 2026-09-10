@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/anatolykoptev/go-engine/search"
+	"github.com/anatolykoptev/go-kit/env"
 	"golang.org/x/time/rate"
 )
 
@@ -36,7 +38,7 @@ func SetRawSearcher(r RawSearcher) { rawSearcherInstance = r }
 
 // SearchWeb tries go-search first (if wired), falling back to SearchDirect.
 // This routes search through go-search's fused multi-source pipeline
-// (Brave API + ox-browser-search + DDG via proxy) instead of hitting DDG
+// (Brave API + ox-browser + DDG via proxy) instead of hitting DDG
 // directly from the container, which gets 202-blocked from a datacenter IP.
 func SearchWeb(ctx context.Context, query, language string) []SearxngResult {
 	if rawSearcherInstance != nil {
@@ -63,8 +65,8 @@ func SearchDirect(ctx context.Context, query, language string) []SearxngResult {
 
 // SearchDirectWithStats is like SearchDirect but also returns DirectStats
 // from the upstream fan-out. The primary signal: Attempted > 0 && OK == 0
-// means every launched leg was blocked or failed (DC-IP / censorship
-// degraded mode), distinguishable from genuine zero results.
+// means every launched leg was blocked or failed — the DC-IP / censorship
+// degraded mode that is otherwise indistinguishable from genuine zero results.
 func SearchDirectWithStats(ctx context.Context, query, language string) ([]SearxngResult, search.DirectStats) {
 	if fetcherProxy == nil {
 		return nil, search.DirectStats{}
@@ -75,25 +77,42 @@ func SearchDirectWithStats(ctx context.Context, query, language string) ([]Searx
 
 // directBrowser returns the best available BrowserDoer for direct scrapers.
 // Prefers DirectClient (no-proxy Chrome-TLS, built when FETCH_DIRECT_FIRST is set)
-// and falls back to BrowserClient (proxy-backed). Returns nil when neither is
-// available, which causes SearchDirect to log "browser nil" and return empty.
+// and falls back to BrowserClient (proxy-backed). It performs concrete-pointer
+// nil checks before converting to the BrowserDoer interface so a typed-nil
+// *BrowserClient never escapes as a non-nil interface value.
 func directBrowser() search.BrowserDoer {
+	if fetcherProxy == nil {
+		return nil
+	}
 	if dc := fetcherProxy.DirectClient(); dc != nil {
 		return dc
 	}
-	return fetcherProxy.BrowserClient()
+	if bc := fetcherProxy.BrowserClient(); bc != nil {
+		return bc
+	}
+	return nil
+}
+
+// directBingEnabled defaults Bing direct discovery on only for standalone
+// deployments. When GO_SEARCH_URL is configured, go-search remains primary and
+// Bing stays opt-in. DIRECT_BING explicitly overrides either default.
+func directBingEnabled() bool {
+	standalone := strings.TrimSpace(env.Str("GO_SEARCH_URL", "")) == ""
+	return env.Bool("DIRECT_BING", standalone)
 }
 
 // directSearchConfig builds a search.DirectConfig from engine state.
 func directSearchConfig() search.DirectConfig {
+	browser := directBrowser()
 	return search.DirectConfig{
-		Browser:          directBrowser(),
-		DDG:              cfg.DirectDDG,
-		Startpage:        cfg.DirectStartpage,
-		Brave:            cfg.DirectBrave,
-		Reddit:           cfg.DirectReddit,
-		Wikipedia:        cfg.DirectWikipedia,
-		Marginalia:       cfg.DirectMarginalia,
+		Browser:          browser,
+		DDG:              browser != nil && cfg.DirectDDG,
+		Startpage:        browser != nil && cfg.DirectStartpage,
+		Brave:            browser != nil && cfg.DirectBrave,
+		Bing:             browser != nil && directBingEnabled(),
+		Reddit:           browser != nil && cfg.DirectReddit,
+		Wikipedia:        browser != nil && cfg.DirectWikipedia,
+		Marginalia:       browser != nil && cfg.DirectMarginalia,
 		BraveLimiter:     rate.NewLimiter(1, 2),
 		RedditLimiter:    rate.NewLimiter(1, 2),
 		Retry:            DefaultRetryConfig,
@@ -101,4 +120,13 @@ func directSearchConfig() search.DirectConfig {
 		EarlyReturnAt:    cfg.SearchEarlyReturnAt,
 		PerSourceTimeout: cfg.SearchPerSourceTimeout,
 	}
+}
+
+// HasDirectSearchBackend reports whether SearchDirect has at least one enabled
+// web-search source and a usable browser transport. ATS discovery uses this to
+// distinguish a genuine empty search from a deployment with no discovery path.
+func HasDirectSearchBackend() bool {
+	browser := directBrowser()
+	return browser != nil && (cfg.DirectDDG || cfg.DirectStartpage || cfg.DirectBrave ||
+		directBingEnabled() || cfg.DirectReddit || cfg.DirectWikipedia || cfg.DirectMarginalia)
 }

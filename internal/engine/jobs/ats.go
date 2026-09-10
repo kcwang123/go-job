@@ -20,6 +20,8 @@ import (
 	"github.com/anatolykoptev/go_job/internal/engine"
 )
 
+var ErrATSDiscoveryUnavailable = errors.New("ats discovery unavailable: configure GO_SEARCH_URL or enable a direct search backend")
+
 // atsLimiter caps concurrent outbound ATS API calls across all providers.
 // Configurable via GO_JOB_ATS_MAX_CONCURRENT env (default 3).
 //
@@ -514,6 +516,9 @@ func SearchGreenhouseJobsStructured(ctx context.Context, query, location string,
 	slugs := unionDiscoverSlugs(ctx, engine.DiscoveryPlatformGreenhouse, query, location, extractGreenhouseSlugs)
 	engine.IncrHuntDiscoveryURLs(engine.DiscoveryPlatformGreenhouse, len(slugs))
 	if len(slugs) == 0 {
+		if ATSDiscoverer == nil && !engine.HasDirectSearchBackend() {
+			return nil, nil, fmt.Errorf("greenhouse: %w", ErrATSDiscoveryUnavailable)
+		}
 		slog.Debug("greenhouse: no slugs found in discovery results")
 		return nil, nil, nil
 	}
@@ -875,6 +880,9 @@ func SearchLeverJobsStructured(ctx context.Context, query, location string, limi
 	slugs := unionDiscoverSlugs(ctx, engine.DiscoveryPlatformLever, query, location, extractLeverSlugs)
 	engine.IncrHuntDiscoveryURLs(engine.DiscoveryPlatformLever, len(slugs))
 	if len(slugs) == 0 {
+		if ATSDiscoverer == nil && !engine.HasDirectSearchBackend() {
+			return nil, nil, fmt.Errorf("lever: %w", ErrATSDiscoveryUnavailable)
+		}
 		slog.Debug("lever: no slugs found in discovery results")
 		return nil, nil, nil
 	}
@@ -1116,6 +1124,9 @@ func SearchAshbyJobsStructured(ctx context.Context, query, location string, limi
 	slugs := unionDiscoverSlugs(ctx, engine.DiscoveryPlatformAshby, query, location, extractAshbySlugs)
 	engine.IncrHuntDiscoveryURLs(engine.DiscoveryPlatformAshby, len(slugs))
 	if len(slugs) == 0 {
+		if ATSDiscoverer == nil && !engine.HasDirectSearchBackend() {
+			return nil, nil, fmt.Errorf("ashby: %w", ErrATSDiscoveryUnavailable)
+		}
 		slog.Debug("ashby: no slugs found in discovery results")
 		return nil, nil, nil
 	}

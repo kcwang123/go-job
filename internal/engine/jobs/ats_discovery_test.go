@@ -200,3 +200,17 @@ func TestDeduplicateByURL(t *testing.T) {
 	assert.Equal(t, "Acme 1", got[0].Title, "first occurrence must be preserved")
 	assert.Equal(t, "https://boards.greenhouse.io/beta", got[1].URL)
 }
+
+
+// TestATSStructuredSearch_NoDiscoveryBackend_ReturnsDiagnosticError verifies
+// that an installation with neither go-search nor any enabled direct-search
+// backend is not reported as a genuine zero-result ATS search.
+func TestATSStructuredSearch_NoDiscoveryBackend_ReturnsDiagnosticError(t *testing.T) {
+	resetATSDiscoverer(t)
+	ATSDiscoverer = nil
+
+	_, _, err := SearchGreenhouseJobsStructured(context.Background(), "senior backend engineer", "", 10)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrATSDiscoveryUnavailable)
+	assert.Contains(t, err.Error(), "greenhouse")
+}
