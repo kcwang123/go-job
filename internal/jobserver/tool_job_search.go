@@ -81,7 +81,7 @@ var summarizeJobResults = engine.SummarizeJobResults
 func registerJobSearch(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "job_search",
-		Description: "Search for job listings on LinkedIn, Greenhouse, Lever, Ashby, YC workatastartup.com, HN Who is Hiring, Craigslist, RemoteOK, WeWorkRemotely, Remotive, Freelancer, Inspira (careers.un.org UN Secretariat), and UNDP (jobs.undp.org). Returns structured JSON with job details (title, company, location, salary, skills, URL) plus a `sources` array reporting the per-source outcome of the fan-out. Supports filters for experience level, job type, remote/onsite, time range, and platform. UN sources are opt-in: platform=inspira queries careers.un.org only, platform=undp queries jobs.undp.org only, platform=un fans out to both. The default platform=all DOES NOT query Inspira or UNDP — set platform explicitly when looking for UN-system openings. raw=true skips LLM processing and returns raw tweet objects — only meaningful when platform=twitter. The `sources` field (absent on cache hits and the twitter raw path) carries one SourceStatus per selected source with outcome ∈ {ok, empty, skipped, not_dispatched, blocked, failed} and a reason: ok = ran and returned >=1 result; empty = ran and returned 0; skipped = ran but declined (missing API key — set the source's API key env var); not_dispatched = never ran (search deadline arrived before a concurrency slot was acquired — raise the timeout or reduce the fan-out); blocked = refused by upstream (breaker open, HTTP 403/429, bot challenge); failed = errored (transport, parse, deadline). When zero results coincide with any skipped/not_dispatched/blocked/failed source, the summary names those sources instead of the generic 'No results found.' When the search deadline fires mid-fan-out and at least one raw result was collected, the output carries NO job listings (raw results are not processed into JobListing when the context is cancelled), a `summary` reporting how many raw results were collected but not processed into job listings and which sources did not complete grouped by cause, and the populated `sources` array; the raw results themselves are not surfaced as a separate field. A deadline that fires with zero raw results takes the zero-results summary shape described above instead.",
+		Description: "Search for job listings on LinkedIn, Greenhouse, Lever, Ashby, YC workatastartup.com, HN Who is Hiring, Craigslist, RemoteOK, WeWorkRemotely, Remotive, Freelancer, Inspira (careers.un.org UN Secretariat), and UNDP (jobs.undp.org). Returns structured JSON with job details (title, company, location, salary, skills, URL) plus a `sources` array reporting the per-source outcome of the fan-out. Supports filters for experience level, job type, remote/onsite, time range, and platform. UN sources are opt-in: platform=inspira queries careers.un.org only, platform=undp queries jobs.undp.org only, platform=un fans out to both. The default platform=all DOES NOT query Inspira or UNDP — set platform explicitly when looking for UN-system openings. raw=true skips embedding, JD fetching, and LLM processing. For platform=twitter it returns raw tweet objects; for other platforms it returns deterministic connector candidates plus any structured listings and source statuses. The `sources` field (absent on cache hits and the twitter raw path) carries one SourceStatus per selected source with outcome ∈ {ok, empty, skipped, not_dispatched, blocked, failed} and a reason: ok = ran and returned >=1 result; empty = ran and returned 0; skipped = ran but declined (missing API key — set the source's API key env var); not_dispatched = never ran (search deadline arrived before a concurrency slot was acquired — raise the timeout or reduce the fan-out); blocked = refused by upstream (breaker open, HTTP 403/429, bot challenge); failed = errored (transport, parse, deadline). When zero results coincide with any skipped/not_dispatched/blocked/failed source, the summary names those sources instead of the generic 'No results found.' When the search deadline fires mid-fan-out and at least one raw result was collected, the output carries NO job listings (raw results are not processed into JobListing when the context is cancelled), a `summary` reporting how many raw results were collected but not processed into job listings and which sources did not complete grouped by cause, and the populated `sources` array; the raw results themselves are not surfaced as a separate field. A deadline that fires with zero raw results takes the zero-results summary shape described above instead.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, runJobSearch)
 }
@@ -112,8 +112,14 @@ func runJobSearch(ctx context.Context, req *mcp.CallToolRequest, input engine.Jo
 	}
 
 	cacheKey := engine.CacheKey("job_search", input.Query, input.Location, input.Experience, input.JobType, input.Remote, input.TimeRange, input.Platform, fmt.Sprintf("limit_%d_offset_%d", input.Limit, input.Offset))
-	if out, ok := engine.CacheLoadJSON[engine.JobSearchOutput](ctx, cacheKey); ok {
-		return nil, out, nil
+	// Raw mode is intentionally uncached here: the normal cache stores the
+	// LLM-processed JobSearchOutput shape, while raw mode returns the connector
+	// candidates directly. Reusing the normal cache would silently defeat the
+	// no-LLM contract whenever a processed result for the same query exists.
+	if !input.Raw {
+		if out, ok := engine.CacheLoadJSON[engine.JobSearchOutput](ctx, cacheKey); ok {
+			return nil, out, nil
+		}
 	}
 
 	// Apply user profile defaults.
@@ -289,6 +295,37 @@ spawn:
 
 	// Apply blacklist filter.
 	deduped = applyBlacklist(deduped, input.Blacklist)
+
+	// General raw mode: after connector fan-out, deterministic dedup and
+	// blacklist filtering, return the candidates directly. This deliberately
+	// happens BEFORE the relevance gate, content fetch, and LLM summarization so
+	// callers such as Hermes can own ranking/reasoning without paying for a
+	// second model pass inside go-job.
+	if input.Raw {
+		if input.Offset > 0 && input.Offset < len(deduped) {
+			deduped = deduped[input.Offset:]
+		} else if input.Offset >= len(deduped) && len(deduped) > 0 {
+			deduped = nil
+		}
+
+		top := engine.DedupByDomain(deduped, limit)
+		if len(top) > limit {
+			top = top[:limit]
+		}
+		structured := structuredListingsForRaw(top, structuredJobs)
+		rawOut := rawJobSearchOutput{
+			Query:      input.Query,
+			Results:    top,
+			Structured: structured,
+			Sources:    sources,
+			Summary:    fmt.Sprintf("%d raw candidate(s), %d structured listing(s); embedding and LLM processing skipped.", len(top), len(structured)),
+		}
+		encoded, marshalErr := json.Marshal(rawOut)
+		if marshalErr != nil {
+			return nil, engine.JobSearchOutput{}, fmt.Errorf("marshal raw job search output: %w", marshalErr)
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}}, engine.JobSearchOutput{}, nil
+	}
 
 	// Relevance gate: score every candidate against the query via cosine
 	// similarity (embedder + rerank.MathReranker), then filter by threshold.
@@ -606,6 +643,47 @@ spawn:
 		return cr, zero, nil
 	}
 	return nil, out, nil
+}
+
+// rawJobSearchOutput is the transport shape for job_search(raw=true) on
+// non-Twitter platforms. Results preserves every connector candidate that
+// survives deterministic filtering; Structured carries richer machine-extracted
+// fields when a connector implements StructuredFetcher.
+type rawJobSearchOutput struct {
+	Query      string                `json:"query"`
+	Results    []engine.SearxngResult `json:"results"`
+	Structured []engine.JobListing   `json:"structured,omitempty"`
+	Sources    []engine.SourceStatus  `json:"sources,omitempty"`
+	Summary    string                `json:"summary"`
+}
+
+// structuredListingsForRaw keeps only structured records whose URL survived
+// deterministic filtering/pagination. This prevents raw mode from returning
+// structured entries that were removed by blacklist, dedup, or limit.
+func structuredListingsForRaw(top []engine.SearxngResult, structuredJobs []engine.JobListing) []engine.JobListing {
+	if len(top) == 0 || len(structuredJobs) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(top))
+	for _, r := range top {
+		if r.URL != "" {
+			allowed[jobs.NormalizeURL(r.URL)] = true
+		}
+	}
+	out := make([]engine.JobListing, 0, len(structuredJobs))
+	seen := make(map[string]bool, len(structuredJobs))
+	for _, j := range structuredJobs {
+		if j.URL == "" {
+			continue
+		}
+		k := jobs.NormalizeURL(j.URL)
+		if !allowed[k] || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, j)
+	}
+	return out
 }
 
 // buildUnavailableSpine builds the deterministic spine when the LLM is
