@@ -77,8 +77,9 @@ func SearchDirectWithStats(ctx context.Context, query, language string) ([]Searx
 
 // directBrowser returns the best available BrowserDoer for direct scrapers.
 // Prefers DirectClient (no-proxy Chrome-TLS, built when FETCH_DIRECT_FIRST is set)
-// and falls back to BrowserClient (proxy-backed). Returns nil when neither is
-// available, which causes SearchDirect to log "browser nil" and return empty.
+// and falls back to BrowserClient (proxy-backed). It performs concrete-pointer
+// nil checks before converting to the BrowserDoer interface so a typed-nil
+// *BrowserClient never escapes as a non-nil interface value.
 func directBrowser() search.BrowserDoer {
 	if fetcherProxy == nil {
 		return nil
@@ -86,7 +87,10 @@ func directBrowser() search.BrowserDoer {
 	if dc := fetcherProxy.DirectClient(); dc != nil {
 		return dc
 	}
-	return fetcherProxy.BrowserClient()
+	if bc := fetcherProxy.BrowserClient(); bc != nil {
+		return bc
+	}
+	return nil
 }
 
 // directBingEnabled defaults Bing direct discovery on only for standalone
@@ -99,15 +103,16 @@ func directBingEnabled() bool {
 
 // directSearchConfig builds a search.DirectConfig from engine state.
 func directSearchConfig() search.DirectConfig {
+	browser := directBrowser()
 	return search.DirectConfig{
-		Browser:          directBrowser(),
-		DDG:              cfg.DirectDDG,
-		Startpage:        cfg.DirectStartpage,
-		Brave:            cfg.DirectBrave,
-		Bing:             directBingEnabled(),
-		Reddit:           cfg.DirectReddit,
-		Wikipedia:        cfg.DirectWikipedia,
-		Marginalia:       cfg.DirectMarginalia,
+		Browser:          browser,
+		DDG:              browser != nil && cfg.DirectDDG,
+		Startpage:        browser != nil && cfg.DirectStartpage,
+		Brave:            browser != nil && cfg.DirectBrave,
+		Bing:             browser != nil && directBingEnabled(),
+		Reddit:           browser != nil && cfg.DirectReddit,
+		Wikipedia:        browser != nil && cfg.DirectWikipedia,
+		Marginalia:       browser != nil && cfg.DirectMarginalia,
 		BraveLimiter:     rate.NewLimiter(1, 2),
 		RedditLimiter:    rate.NewLimiter(1, 2),
 		Retry:            DefaultRetryConfig,
@@ -121,6 +126,7 @@ func directSearchConfig() search.DirectConfig {
 // web-search source and a usable browser transport. ATS discovery uses this to
 // distinguish a genuine empty search from a deployment with no discovery path.
 func HasDirectSearchBackend() bool {
-	return fetcherProxy != nil && directBrowser() != nil && (cfg.DirectDDG || cfg.DirectStartpage || cfg.DirectBrave ||
+	browser := directBrowser()
+	return browser != nil && (cfg.DirectDDG || cfg.DirectStartpage || cfg.DirectBrave ||
 		directBingEnabled() || cfg.DirectReddit || cfg.DirectWikipedia || cfg.DirectMarginalia)
 }
