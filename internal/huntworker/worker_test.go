@@ -119,6 +119,17 @@ func TestNewWorker_NilStore_ReturnsNil(t *testing.T) {
 	assert.Nil(t, w)
 }
 
+
+func TestStartWorker_NilStore_DoesNotPanic(t *testing.T) {
+	// Regression: passing a nil *hunt.Store through the huntSettingsStore
+	// interface creates a non-nil typed interface. StartWorker must guard the
+	// concrete pointer before LoadSettings or GetHuntSettings is invoked on a
+	// nil receiver.
+	assert.NotPanics(t, func() {
+		StartWorker(context.Background(), nil, nil)
+	})
+}
+
 // TestNoCompanyTargetingInDefaults is the fitness function (ADR-002 / P1 design):
 // go-job is a PUBLIC repo — personal target companies must never be baked into
 // the shipped default queries.  The check covers both URL-slug form AND bare
