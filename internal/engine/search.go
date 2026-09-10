@@ -102,3 +102,12 @@ func directSearchConfig() search.DirectConfig {
 		PerSourceTimeout: cfg.SearchPerSourceTimeout,
 	}
 }
+
+
+// HasDirectSearchBackend reports whether SearchDirect has at least one enabled
+// web-search source and a usable browser transport. ATS discovery uses this to
+// distinguish a genuine empty search from a deployment with no discovery path.
+func HasDirectSearchBackend() bool {
+	return directBrowser() != nil && (cfg.DirectDDG || cfg.DirectStartpage || cfg.DirectBrave ||
+		cfg.DirectReddit || cfg.DirectWikipedia || cfg.DirectMarginalia)
+}
