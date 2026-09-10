@@ -117,3 +117,15 @@ func TestLoadSettings_DBError_UsesEnvDefaults(t *testing.T) {
 type assertError string
 
 func (e assertError) Error() string { return string(e) }
+
+
+// TestStartWorker_NilConcreteStore_DoesNotPanic guards the typed-nil interface
+// trap: passing (*hunt.Store)(nil) into LoadSettings as huntSettingsStore makes
+// the interface itself non-nil, so StartWorker must reject the concrete nil
+// pointer before conversion.
+func TestStartWorker_NilConcreteStore_DoesNotPanic(t *testing.T) {
+	t.Setenv("HUNT_INGEST_ENABLED", "true")
+	assert.NotPanics(t, func() {
+		StartWorker(context.Background(), (*hunt.Store)(nil), nil)
+	})
+}
