@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/anatolykoptev/go-engine/search"
+	"github.com/anatolykoptev/go-kit/env"
 	"golang.org/x/time/rate"
 )
 
@@ -63,8 +65,8 @@ func SearchDirect(ctx context.Context, query, language string) []SearxngResult {
 
 // SearchDirectWithStats is like SearchDirect but also returns DirectStats
 // from the upstream fan-out. The primary signal: Attempted > 0 && OK == 0
-// means every launched leg was blocked or failed (DC-IP / censorship
-// degraded mode), distinguishable from genuine zero results.
+// means every launched leg was blocked or failed — the DC-IP / censorship
+// degraded mode that is otherwise indistinguishable from genuine zero results.
 func SearchDirectWithStats(ctx context.Context, query, language string) ([]SearxngResult, search.DirectStats) {
 	if fetcherProxy == nil {
 		return nil, search.DirectStats{}
@@ -87,6 +89,14 @@ func directBrowser() search.BrowserDoer {
 	return fetcherProxy.BrowserClient()
 }
 
+// directBingEnabled defaults Bing direct discovery on only for standalone
+// deployments. When GO_SEARCH_URL is configured, go-search remains primary and
+// Bing stays opt-in. DIRECT_BING explicitly overrides either default.
+func directBingEnabled() bool {
+	standalone := strings.TrimSpace(env.Str("GO_SEARCH_URL", "")) == ""
+	return env.Bool("DIRECT_BING", standalone)
+}
+
 // directSearchConfig builds a search.DirectConfig from engine state.
 func directSearchConfig() search.DirectConfig {
 	return search.DirectConfig{
@@ -94,6 +104,7 @@ func directSearchConfig() search.DirectConfig {
 		DDG:              cfg.DirectDDG,
 		Startpage:        cfg.DirectStartpage,
 		Brave:            cfg.DirectBrave,
+		Bing:             directBingEnabled(),
 		Reddit:           cfg.DirectReddit,
 		Wikipedia:        cfg.DirectWikipedia,
 		Marginalia:       cfg.DirectMarginalia,
@@ -111,5 +122,5 @@ func directSearchConfig() search.DirectConfig {
 // distinguish a genuine empty search from a deployment with no discovery path.
 func HasDirectSearchBackend() bool {
 	return fetcherProxy != nil && directBrowser() != nil && (cfg.DirectDDG || cfg.DirectStartpage || cfg.DirectBrave ||
-		cfg.DirectReddit || cfg.DirectWikipedia || cfg.DirectMarginalia)
+		directBingEnabled() || cfg.DirectReddit || cfg.DirectWikipedia || cfg.DirectMarginalia)
 }
