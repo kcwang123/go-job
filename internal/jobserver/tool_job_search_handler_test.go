@@ -9,6 +9,7 @@ import (
 
 	"github.com/anatolykoptev/go_job/internal/engine"
 	"github.com/anatolykoptev/go_job/internal/engine/jobs/connectors"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // testEmptySource returns (nil, nil) immediately — a genuine empty result.
@@ -174,5 +175,86 @@ func TestJobSearchHandler_B1_GateEmptiedSummaryReachOutput(t *testing.T) {
 	}
 	if strings.Contains(out.Summary, "offset beyond total") {
 		t.Fatalf("B1: summary must NOT misattribute the empty gate result to pagination, got %q", out.Summary)
+	}
+}
+
+
+// TestJobSearchHandler_RawBypassesLLM verifies that raw=true on a normal
+// (non-Twitter) source returns the connector candidates directly and never
+// invokes the LLM summarizer. This is the core no-double-reasoning contract for
+// callers such as Hermes.
+func TestJobSearchHandler_RawBypassesLLM(t *testing.T) {
+	const jobURL = "https://jobs.example.com/backend-1"
+	withTestRegistry(t, testResultSource{results: []engine.SearxngResult{{
+		Title:   "Senior Backend Engineer",
+		URL:     jobURL,
+		Content: "C# distributed systems",
+	}}})
+
+	orig := summarizeJobResults
+	t.Cleanup(func() { summarizeJobResults = orig })
+	llmCalled := false
+	summarizeJobResults = func(_ context.Context, query, _ string, _ int, _ []engine.SearxngResult, _ map[string]string) (*engine.JobSearchOutput, error) {
+		llmCalled = true
+		return &engine.JobSearchOutput{Query: query}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cr, out, err := runJobSearch(ctx, nil, engine.JobSearchInput{
+		Query:    "senior backend",
+		Platform: "test-handler-platform",
+		Raw:      true,
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("raw job search returned error: %v", err)
+	}
+	if llmCalled {
+		t.Fatal("raw=true must not invoke summarizeJobResults")
+	}
+	if cr == nil || len(cr.Content) != 1 {
+		t.Fatalf("raw=true must return one direct MCP text payload; got %#v", cr)
+	}
+	if len(out.Jobs) != 0 {
+		t.Fatalf("typed JobSearchOutput must stay empty for direct raw payload; got %+v", out)
+	}
+	textContent, ok := cr.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("raw payload type = %T, want *mcp.TextContent", cr.Content[0])
+	}
+	var payload rawJobSearchOutput
+	if err := json.Unmarshal([]byte(textContent.Text), &payload); err != nil {
+		t.Fatalf("decode raw payload: %v; payload=%q", err, textContent.Text)
+	}
+	if len(payload.Results) != 1 || payload.Results[0].URL != jobURL {
+		t.Fatalf("raw candidates = %+v, want one result at %s", payload.Results, jobURL)
+	}
+	if !strings.Contains(payload.Summary, "LLM processing skipped") {
+		t.Fatalf("raw summary must state LLM was skipped; got %q", payload.Summary)
+	}
+	if len(payload.Sources) != 1 || payload.Sources[0].Outcome != engine.SourceOutcomeOK {
+		t.Fatalf("raw sources = %+v, want one ok source", payload.Sources)
+	}
+}
+
+// TestStructuredListingsForRaw verifies structured rows are returned only when
+// their URLs survive the deterministic raw candidate set.
+func TestStructuredListingsForRaw(t *testing.T) {
+	const keep = "https://jobs.lever.co/acme/keep"
+	const drop = "https://jobs.lever.co/acme/drop"
+	top := []engine.SearxngResult{{URL: keep, Title: "Keep"}}
+	structured := []engine.JobListing{
+		{URL: keep, Title: "Keep", Company: "Acme", Source: "lever"},
+		{URL: drop, Title: "Drop", Company: "Acme", Source: "lever"},
+		{URL: keep + "/", Title: "Duplicate normalized URL", Company: "Acme", Source: "lever"},
+	}
+	got := structuredListingsForRaw(top, structured)
+	if len(got) != 1 {
+		t.Fatalf("structured raw rows = %d, want 1: %+v", len(got), got)
+	}
+	if jobs.NormalizeURL(got[0].URL) != jobs.NormalizeURL(keep) {
+		t.Fatalf("structured raw URL = %q, want %q", got[0].URL, keep)
 	}
 }
