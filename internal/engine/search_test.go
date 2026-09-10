@@ -3,6 +3,8 @@ package engine
 import (
 	"os"
 	"testing"
+
+	"github.com/anatolykoptev/go-engine/fetch"
 )
 
 func TestFilterByScore(t *testing.T) {
@@ -93,6 +95,35 @@ func TestHasDirectSearchBackend_UninitializedEngine(t *testing.T) {
 
 	if HasDirectSearchBackend() {
 		t.Fatal("expected no direct search backend before engine initialization")
+	}
+}
+
+func TestDirectBrowser_RejectsTypedNilBrowserClient(t *testing.T) {
+	prev := fetcherProxy
+	fetcherProxy = &fetch.Fetcher{}
+	t.Cleanup(func() { fetcherProxy = prev })
+
+	if got := directBrowser(); got != nil {
+		t.Fatalf("expected nil BrowserDoer for zero-value fetcher, got %T", got)
+	}
+}
+
+func TestDirectSearchConfig_DisablesBrowserSourcesWithoutTransport(t *testing.T) {
+	prevFetcher := fetcherProxy
+	prevCfg := cfg
+	fetcherProxy = &fetch.Fetcher{}
+	cfg.DirectStartpage = true
+	t.Cleanup(func() {
+		fetcherProxy = prevFetcher
+		cfg = prevCfg
+		Cfg = &cfg
+	})
+	t.Setenv("GO_SEARCH_URL", "")
+	t.Setenv("DIRECT_BING", "true")
+
+	c := directSearchConfig()
+	if c.Browser != nil || c.Startpage || c.Bing {
+		t.Fatalf("expected browser-backed sources disabled without transport: browser=%T startpage=%v bing=%v", c.Browser, c.Startpage, c.Bing)
 	}
 }
 
