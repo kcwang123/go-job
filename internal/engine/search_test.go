@@ -1,6 +1,9 @@
 package engine
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestFilterByScore(t *testing.T) {
 	results := []SearxngResult{
@@ -90,5 +93,46 @@ func TestHasDirectSearchBackend_UninitializedEngine(t *testing.T) {
 
 	if HasDirectSearchBackend() {
 		t.Fatal("expected no direct search backend before engine initialization")
+	}
+}
+
+func TestDirectBingEnabled_DefaultsToStandaloneOnly(t *testing.T) {
+	oldBing, hadBing := os.LookupEnv("DIRECT_BING")
+	oldGoSearch, hadGoSearch := os.LookupEnv("GO_SEARCH_URL")
+	t.Cleanup(func() {
+		if hadBing {
+			_ = os.Setenv("DIRECT_BING", oldBing)
+		} else {
+			_ = os.Unsetenv("DIRECT_BING")
+		}
+		if hadGoSearch {
+			_ = os.Setenv("GO_SEARCH_URL", oldGoSearch)
+		} else {
+			_ = os.Unsetenv("GO_SEARCH_URL")
+		}
+	})
+
+	_ = os.Unsetenv("DIRECT_BING")
+	_ = os.Unsetenv("GO_SEARCH_URL")
+	if !directBingEnabled() {
+		t.Fatal("expected Bing direct search enabled by default in standalone mode")
+	}
+
+	_ = os.Setenv("GO_SEARCH_URL", "http://go-search:8080")
+	if directBingEnabled() {
+		t.Fatal("expected Bing direct search disabled by default when go-search is configured")
+	}
+}
+
+func TestDirectBingEnabled_ExplicitOverride(t *testing.T) {
+	t.Setenv("GO_SEARCH_URL", "")
+	t.Setenv("DIRECT_BING", "false")
+	if directBingEnabled() {
+		t.Fatal("expected DIRECT_BING=false to disable Bing")
+	}
+
+	t.Setenv("DIRECT_BING", "true")
+	if !directBingEnabled() {
+		t.Fatal("expected DIRECT_BING=true to enable Bing")
 	}
 }
