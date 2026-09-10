@@ -36,7 +36,7 @@ func SetRawSearcher(r RawSearcher) { rawSearcherInstance = r }
 
 // SearchWeb tries go-search first (if wired), falling back to SearchDirect.
 // This routes search through go-search's fused multi-source pipeline
-// (Brave API + ox-browser-search + DDG via proxy) instead of hitting DDG
+// (Brave API + ox-browser + DDG via proxy) instead of hitting DDG
 // directly from the container, which gets 202-blocked from a datacenter IP.
 func SearchWeb(ctx context.Context, query, language string) []SearxngResult {
 	if rawSearcherInstance != nil {
@@ -78,6 +78,9 @@ func SearchDirectWithStats(ctx context.Context, query, language string) ([]Searx
 // and falls back to BrowserClient (proxy-backed). Returns nil when neither is
 // available, which causes SearchDirect to log "browser nil" and return empty.
 func directBrowser() search.BrowserDoer {
+	if fetcherProxy == nil {
+		return nil
+	}
 	if dc := fetcherProxy.DirectClient(); dc != nil {
 		return dc
 	}
@@ -103,11 +106,10 @@ func directSearchConfig() search.DirectConfig {
 	}
 }
 
-
 // HasDirectSearchBackend reports whether SearchDirect has at least one enabled
 // web-search source and a usable browser transport. ATS discovery uses this to
 // distinguish a genuine empty search from a deployment with no discovery path.
 func HasDirectSearchBackend() bool {
-	return directBrowser() != nil && (cfg.DirectDDG || cfg.DirectStartpage || cfg.DirectBrave ||
+	return fetcherProxy != nil && directBrowser() != nil && (cfg.DirectDDG || cfg.DirectStartpage || cfg.DirectBrave ||
 		cfg.DirectReddit || cfg.DirectWikipedia || cfg.DirectMarginalia)
 }
