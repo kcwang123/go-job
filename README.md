@@ -8,7 +8,7 @@ Job search, resume optimization, career research, and application tracking — a
 
 | Tool | Description |
 |------|-------------|
-| `job_search` | Unified search: LinkedIn, Greenhouse, Lever, YC, HN, Indeed, Хабр, RemoteOK, WeWorkRemotely, Remotive, Twitter/X, Google Jobs. `platform=` selects source; `limit` (default 15, max 50) + `offset` for pagination. |
+| `job_search` | Unified search: LinkedIn, Greenhouse, Lever, YC, HN, Indeed, Хабр, RemoteOK, WeWorkRemotely, Remotive, Twitter/X, Google Jobs. `platform=` selects source; `limit` (default 15, max 50) + `offset` for pagination. `raw=true` bypasses embedding/JD-fetch/LLM post-processing and returns deterministic connector candidates; Twitter keeps its native raw-tweet response. |
 | `job_match_score` | Score job listings against a resume using Jaccard keyword overlap (0–100). |
 | `opportunity_search` | Cross-type opportunity search (jobs + freelance + bounty). |
 | `opportunity_analyze` | Deep analyze a single opportunity URL. |
@@ -128,7 +128,7 @@ go_job/
 ## Key Implementation Details
 
 ### job_search
-- **Unified platform**: `remote_work_search` and `freelance_search` and `twitter_job_search` are folded into `job_search` via `platform=remoteok|weworkremotely|remotive|twitter`. Use `raw=true` with `platform=twitter` to skip LLM processing.
+- **Unified platform**: `remote_work_search` and `freelance_search` and `twitter_job_search` are folded into `job_search` via `platform=remoteok|weworkremotely|remotive|twitter`. Use `raw=true` on any platform to skip the relevance embedding gate, JD content fetching, and LLM summarization. Non-Twitter raw mode returns connector `results`, richer machine-extracted `structured` listings when available, `sources`, and a summary. `platform=twitter&raw=true` preserves the native raw-tweet response.
 - **LinkedIn**: no auth, Chrome TLS fingerprint via `bogdanfinn/tls-client`; pagination with `offset`; 42 geo locations.
 - **Google Jobs**: `platform=google` via SearXNG.
 - **UN sources**: `platform=inspira` (careers.un.org) / `platform=undp` / `platform=un` (fan-out both). Not included in `platform=all`.
