@@ -82,3 +82,13 @@ func TestDedupByDomain(t *testing.T) {
 		}
 	})
 }
+
+func TestHasDirectSearchBackend_UninitializedEngine(t *testing.T) {
+	prev := fetcherProxy
+	fetcherProxy = nil
+	t.Cleanup(func() { fetcherProxy = prev })
+
+	if HasDirectSearchBackend() {
+		t.Fatal("expected no direct search backend before engine initialization")
+	}
+}
